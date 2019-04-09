@@ -8,6 +8,10 @@ import time
 
 
 def process_request(clients, conn, addr, lock: threading.Lock):
+    content = conn.recv(1024)
+    if content.decode().startswith("beat"):
+        while conn.recv(1024):
+            continue
     with lock:
         if "client1" not in clients:
             client = "client1"
@@ -18,7 +22,7 @@ def process_request(clients, conn, addr, lock: threading.Lock):
         else:
             conn.close()
             return
-    private_addr = conn.recv(1024)
+    private_addr = content
     expect_client = "client2" if client == "client1" else "client1"
     while expect_client not in clients:
         time.sleep(1)
@@ -27,8 +31,8 @@ def process_request(clients, conn, addr, lock: threading.Lock):
     total_message = "{}|{}".format(public_addr, private_addr)
     print(total_message, client, addr)
     clients[expect_client][1].sendall(total_message.encode())
-    clients[expect_client][1].close()
-    del clients[expect_client]
+    # clients[expect_client][1].close()
+    # del clients[expect_client]
 
 
 def main(host="0.0.0.0", port=50005):
