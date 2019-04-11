@@ -61,9 +61,9 @@ def connect(local_addr, addr):
             # STOP.set()
 
 
-def main(host='www.xiaobaoielts.pw', port=50005):
-    host = '192.168.88.201'
-    port = 50005
+def main(host='www.baidu.com', port=12345):
+    host = '192.168.1.2'
+    port = 1234
     sa = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sa.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     print(host, port)
