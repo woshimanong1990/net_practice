@@ -9,8 +9,8 @@ import time
 
 def main():
 
-    HOST = ''  # The remote host
-    PORT = 50007  # The same port as used by the server
+    HOST = 'www.baidu.com'  # The remote host
+    PORT = 1234  # The same port as used by the server
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect((HOST, PORT))
         while True:

@@ -2,23 +2,23 @@
 from __future__ import absolute_import
 from __future__ import unicode_literals
 from __future__ import print_function
+import re
+import time
+
+import logging
+import threading
 import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import threading
-import re
-import time
-import random
-import traceback
-import logging
-
 pattern = re.compile(r"(?P<ip>(\d+\.){3}\d+):(?P<port>\d+)")
+PROGRESS_STOP = threading.Event()
+# STOP = threading.Event()
 lock = threading.Lock()
+
 logging.basicConfig(filename='app.log', filemode='w', format= '%(asctime)s: %(name)s - %(levelname)s -[%(threadName)s]- %(message)s')
 logger = logging.getLogger()
 logger.setLevel(logging.DEBUG)
 global_count = 0
-connect_stop = {}
 
 
 def connect_server(host, port):
@@ -37,28 +37,44 @@ def connect_server(host, port):
 
 
 def connect_peer(local_addr, addr, stop_event):
-    global global_count
     print("connect info", local_addr, addr)
-
+    is_first = True
+    stop_set_by_self = False
     while True:
         try:
             print("try connect ",  addr)
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.bind(local_addr)
-            # s.settimeout(3)
+            # if is_first:
+            #     s.settimeout(5)
             with lock:
-                if stop_event.is_set():
-                    return
+                logger.info("lock in **********")
+                if stop_event.is_set() and not stop_set_by_self:
+                    # 退出后记得清零，不然永远不会请求
+                    return None
+                logger.info(" event is set:%s", stop_event.isSet())
                 s.connect(addr)
                 stop_event.set()
+                stop_set_by_self = True
                 logger.info("*********************, connect success:{}:{}".format(local_addr, addr))
-                return
+                if is_first:
+                    time.sleep(1)
+                    s.close()
+                    is_first = False
+                    time.sleep(3)
+                    logger.info("continue here ++++")
+                    continue
+                logger.info("+++++++++set event++++")
+
+                logger.info("lock out **********")
+            logger.info("connected from %s to %s success!", local_addr, addr)
+            return s
+        except socket.timeout as e:
+            continue
         except:
-            logger.error("connect peer error", exc_info=True)
-            connect_stop[local_addr[1]] = True
-            connect_stop[addr[1]] = True
-            return
+            logger.error("connect to peer error", exc_info=True)
+            return None
 
 
 def data_communication(receiver_connect, send_connect):
@@ -81,50 +97,9 @@ def data_communication(receiver_connect, send_connect):
             return
 
 
-def create_local_bind_connect(host, port):
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect((host, int(port)))
-        return s
-    except:
-        logger.error("create local bind error", exc_info=True)
-        return None
-
-
-def accept_from_peer(port, local_host, local_port):
-    print("accept_from_peer at :%s port" % port)
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind(('', port))
-    s.listen()
-    s.settimeout(5)
-    global global_count
-    while True:
-        try:
-            if port in connect_stop:
-                return
-            local_conn, addr = s.accept()
-            logger.info("get new connect from peer:%s", addr)
-        except socket.timeout:
-            continue
-        except:
-            logger.error("accept error", exc_info=True)
-            continue
-        connect_socket = create_local_bind_connect(local_host, local_port)
-        if not connect_socket:
-            logger.error("create local bind connect error")
-            continue
-        threads = [
-            threading.Thread(target=data_communication, args=(local_conn, connect_socket)),
-            threading.Thread(target=data_communication, args=(connect_socket, local_conn)),
-        ]
-        [t.setDaemon(True) for t in threads]
-        [t.start() for t in threads]
-
-
 def get_remote_addr(host, port):
     try:
-        # local_addr, receive_data, _ = connect_server('192.168.1.2', 1234)
+        # local_addr, receive_data, _ = connect_server('192.168.1.2', 123)
         local_addr, receive_data, _ = connect_server(host, port)
         public_addr, private_addr = receive_data.decode().split("|")
         public_match = pattern.search(public_addr)
@@ -139,33 +114,55 @@ def get_remote_addr(host, port):
         return None, None, None
 
 
-def create_connect(public_api_host, public_api_port, local_connect_host='192.168.1.2', local_connect_port=22):
+def start_local_server(public_api_host, public_api_port,  port, host=""):
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind((host, int(port)))
+    s.listen()
     while True:
+        try:
+            local_conn, addr = s.accept()
+        except:
+            logger.error("local server acc")
+            continue
+        print("++++++ get remote connect")
+        stop_event = threading.Event()
         local_addr, public_addr, private_addr = get_remote_addr(public_api_host, public_api_port)
         if not local_addr or not public_addr or not private_addr:
             logger.error("get another connect info error")
             continue
-        stop_event = threading.Event()
-        tasks = [
-            threading.Thread(target=accept_from_peer, args=(int(private_addr[1]), local_connect_host, local_connect_port)),
-            threading.Thread(target=accept_from_peer, args=(int(local_addr[1]), local_connect_host, local_connect_port)),
-            threading.Thread(target=connect_peer, args=(local_addr, public_addr, stop_event)),
-            threading.Thread(target=connect_peer, args=(local_addr, private_addr, stop_event))
+        connect_infos = [(local_addr, public_addr, stop_event), (local_addr, private_addr, stop_event)]
+        connect_socket = None
+        with ThreadPoolExecutor(max_workers=2) as e:
+            tasks = {e.submit(connect_peer, *t): t for t in connect_infos}
+            for future in as_completed(tasks):
+                info = tasks[future]
+                try:
+                    connect_socket = future.result()
+                    if not connect_socket:
+                        continue
+                    else:
+                        break
+                except:
+                    logger.error("connect to %s error", info)
+                    continue
+        if not connect_socket:
+            continue
+        threads = [
+            threading.Thread(target=data_communication, args=(local_conn, connect_socket)),
+            threading.Thread(target=data_communication, args=(connect_socket, local_conn)),
         ]
-        [t.setDaemon(True) for t in tasks]
-        [t.start() for t in tasks]
-
+        [t.setDaemon(True) for t in threads]
+        [t.start() for t in threads]
+        print("++++++++++++++++++++++++")
 
 
 def main():
-    try:
-        public_api_host = '192.168.1.2'
-        public_api_port = '123'
-        create_connect(public_api_host, public_api_port)
-    except:
-        logger.error("main error", exc_info=True)
+    public_api_host = "192.168.1.2"
+    public_api_port = "123"
+    port = 10028
+    start_local_server(public_api_host, public_api_port, port)
 
 
 if __name__ == "__main__":
-    # 被动客户端，根据master发送的信息做相应处理
     main()

@@ -2,9 +2,11 @@
 import sys
 import logging
 import socket
+import time
+
 import struct
 from threading import Event, Thread
-from test.util import *
+from util import *
 
 
 logger = logging.getLogger('client')
@@ -23,6 +25,11 @@ def accept(port):
     while not STOP.is_set():
         try:
             conn, addr = s.accept()
+            while True:
+                data = conn.recv(1024)
+                if not data:
+                    break
+                print("+++++ recevie data :%s from %s"% (data, addr))
         except socket.timeout:
             continue
         else:
@@ -39,7 +46,12 @@ def connect(local_addr, addr):
     while not STOP.is_set():
         try:
             s.connect(addr)
+            while True:
+                s.sendall(b'hello')
+                print("send success", local_addr, addr, time.time())
+                time.sleep(1)
         except socket.error:
+            time.sleep(1)
             continue
         # except Exception as exc:
         #     logger.exception("unexpected exception encountered")
@@ -49,9 +61,12 @@ def connect(local_addr, addr):
             # STOP.set()
 
 
-def main(host='54.187.46.146', port=5005):
+def main(host='www.baidu.com', port=12345):
+    host = '192.168.1.2'
+    port = 1234
     sa = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sa.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    print(host, port)
     sa.connect((host, port))
     priv_addr = sa.getsockname()
 
